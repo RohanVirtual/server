@@ -12,6 +12,13 @@ const io = new Server(server, {
 });
 
 const usersBySocketId = new Map();
+const typingSocketIds = new Set();
+
+function getUsername(socket, messageUsername) {
+  const fromMessage =
+    typeof messageUsername === "string" ? messageUsername.trim() : "";
+  return fromMessage || usersBySocketId.get(socket.id) || "Anonymous";
+}
 
 // Handle WebSocket connections here
 io.on("connection", (socket) => {
@@ -27,10 +34,12 @@ io.on("connection", (socket) => {
     const text = typeof message?.text === "string" ? message.text : "";
     if (!text.trim()) return;
 
-    const username =
-      (typeof message?.username === "string" && message.username.trim()) ||
-      usersBySocketId.get(socket.id) ||
-      "Anonymous";
+    const username = getUsername(socket, message?.username);
+
+    if (typingSocketIds.has(socket.id)) {
+      typingSocketIds.delete(socket.id);
+      socket.broadcast.emit("typing:stop", { username, senderId: socket.id });
+    }
 
     // Broadcast the message to all connected clients
     io.emit("message", {
@@ -41,9 +50,30 @@ io.on("connection", (socket) => {
     });
   });
 
+  socket.on("typing:start", ({ username } = {}) => {
+    const name = getUsername(socket, username);
+    if (typingSocketIds.has(socket.id)) return;
+
+    typingSocketIds.add(socket.id);
+    socket.broadcast.emit("typing:start", { username: name, senderId: socket.id });
+  });
+
+  socket.on("typing:stop", ({ username } = {}) => {
+    const name = getUsername(socket, username);
+    if (!typingSocketIds.has(socket.id)) return;
+
+    typingSocketIds.delete(socket.id);
+    socket.broadcast.emit("typing:stop", { username: name, senderId: socket.id });
+  });
+
   // Handle disconnections
   socket.on("disconnect", () => {
     console.log(socket.id, " disconnected");
+    if (typingSocketIds.has(socket.id)) {
+      typingSocketIds.delete(socket.id);
+      const username = usersBySocketId.get(socket.id) || "Anonymous";
+      socket.broadcast.emit("typing:stop", { username, senderId: socket.id });
+    }
     usersBySocketId.delete(socket.id);
   });
 });
